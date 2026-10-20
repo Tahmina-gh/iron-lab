@@ -1,0 +1,20 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Log in — Iron Lab</title><link rel="stylesheet" href="/css/theme.css"><link rel="stylesheet" href="/css/app.css"></head><body><main class="auth"><div class="auth-card glass"><a href="/" class="logo brand">IRON<span>LAB</span></a>
+<h1>Welcome back.</h1><p class="sub">Log in to book classes, manage your membership and track progress.</p>
+<form id="f" novalidate>
+  <div class="field"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" required></div>
+  <div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required></div>
+  <p class="form-err" role="alert"></p>
+  <button class="btn btn-primary btn-block" type="submit">Log in</button>
+</form>
+<p class="alt"><a href="/forgot.html">Forgot your password?</a></p>
+<p class="alt">New here? <a href="/signup.html">Create an account</a></p>
+<p class="alt" style="margin-top:10px;font-size:12.5px">Google sign-in is not enabled in this build — see README.</p>
+</div></main><script src="/js/vendor/qrcode.js"></script><script src="/js/app.js"></script>
+<script>
+bindForm($('#f'), async (v) => {
+  const { user } = await api('/auth/login', { body: v });
+  const next = new URLSearchParams(location.search).get('next');
+  location.href = next && next.startsWith('/') && !next.startsWith('//') ? next : homeFor(user.role);
+});
+api('/auth/me').then((r) => { if (r.user) location.href = homeFor(r.user.role); }).catch(() => {});
+</script></body></html>

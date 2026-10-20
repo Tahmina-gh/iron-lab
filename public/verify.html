@@ -1,0 +1,8 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Verify email — Iron Lab</title><link rel="stylesheet" href="/css/theme.css"><link rel="stylesheet" href="/css/app.css"></head><body><main class="auth"><div class="auth-card glass"><a href="/" class="logo brand">IRON<span>LAB</span></a>
+<h1>Verifying…</h1><p class="sub" id="msg">One moment.</p><a class="btn btn-primary btn-block" href="/login.html">Continue</a>
+</div></main><script src="/js/vendor/qrcode.js"></script><script src="/js/app.js"></script>
+<script>
+api('/auth/verify-email', { body: { token: new URLSearchParams(location.search).get('token') } })
+  .then(() => { $('h1').textContent = 'Email verified.'; $('#msg').textContent = 'Thanks, your email address is confirmed.'; })
+  .catch((e) => { $('h1').textContent = 'Link problem.'; $('#msg').textContent = e.message; });
+</script></body></html>

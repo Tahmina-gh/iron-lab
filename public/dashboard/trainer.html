@@ -1,0 +1,53 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Trainer · Iron Lab</title>
+<link rel="stylesheet" href="/css/theme.css"><link rel="stylesheet" href="/css/app.css"></head>
+<body><div class="dash"><aside class="side" id="side"></aside><main class="main"><div id="view"><p class="muted">Loading…</p></div></main></div>
+<script src="/js/vendor/qrcode.js"></script><script src="/js/vendor/jsQR.js"></script><script src="/js/app.js"></script>
+<script>
+const TABS = [['today', "Today"], ['upcoming', 'Upcoming'], ['members', 'My members'], ['schedule', 'Schedule'], ['checkin', 'Check-in'], ['alerts', 'Notifications']];
+let U, D, stopCam = null;
+function paintNav(cur) {
+  $('#side').innerHTML = '<a href="/" class="logo">IRON<span>LAB</span></a>' + TABS.map(([k, t]) => `<a class="nav-i ${cur === k ? 'on' : ''}" href="#${k}">${t}</a>`).join('') +
+    `<div class="who"><strong style="color:var(--white)">${esc(U.name)}</strong><br><span class="muted">Trainer</span><br><button class="link" onclick="logout()">Log out</button></div>`;
+}
+const sessionRow = (s, actions) => `<div class="li"><div><strong style="color:var(--white)">${fmtTime(s.start_time)}</strong> · ${esc(s.member_name)}<small>${fmtDate(s.date)} · ${s.price ? money(s.price) : 'Included in plan'}</small></div><div>${badge(s.status)} ${actions && s.status === 'booked' ? `<button class="btn btn-outline sm" data-done="${s.id}">Complete</button> <button class="btn btn-outline sm danger" data-cx="${s.id}">Cancel</button>` : ''}</div></div>`;
+const timeInput = (n, v) => `<input type="time" name="${n}" value="${v || ''}" style="background:var(--surface2);border:1px solid var(--line2);border-radius:var(--radius);padding:8px;color:var(--white)">`;
+const views = {
+  async today() {
+    $('#view').innerHTML = `<div class="topbar"><h2>Today</h2><span class="muted">${fmtDate(today())}</span></div>
+      <div class="grid g-3" style="margin-bottom:16px"><div class="card glass kpi"><b>${D.today.length}</b><span>Sessions today</span></div><div class="card glass kpi"><b>${D.upcoming.length}</b><span>Upcoming</span></div><div class="card glass kpi"><b>${D.members.length}</b><span>Members coached</span></div></div>
+      <div class="card glass"><h3>Today's sessions</h3><div class="list">${D.today.length ? D.today.map((s) => sessionRow(s, true)).join('') : '<p class="empty">No sessions today.</p>'}</div></div>`;
+  },
+  async upcoming() { $('#view').innerHTML = `<div class="topbar"><h2>Upcoming sessions</h2></div><div class="card glass"><div class="list">${D.upcoming.length ? D.upcoming.map((s) => sessionRow(s, true)).join('') : '<p class="empty">Nothing booked yet.</p>'}</div></div>`; },
+  async members() {
+    $('#view').innerHTML = `<div class="topbar"><h2>My members</h2></div><div class="card glass"><div class="tbl"><table><thead><tr><th>Member</th><th>Email</th><th>Sessions</th><th>Last</th><th></th></tr></thead><tbody>${D.members.length ? D.members.map((m) => `<tr><td>${esc(m.name)}</td><td class="muted">${esc(m.email)}</td><td>${m.sessions}</td><td>${fmtDate(m.last_session)}</td><td><button class="link" data-prog="${m.id}" data-name="${esc(m.name)}">Progress</button></td></tr>`).join('') : '<tr><td colspan="5" class="empty">No members yet.</td></tr>'}</tbody></table></div></div>
+      <div class="card glass" style="margin-top:16px"><h3>Recent attendance of your members</h3><div class="list">${D.attendance.length ? D.attendance.map((a) => `<div class="li"><div>${esc(a.name)}<small>${fmtDate(a.date)} · in ${fmtTime(a.check_in)}</small></div></div>`).join('') : '<p class="empty">No recent visits.</p>'}</div></div>`;
+  },
+  async schedule() {
+    const wd = [1, 2, 3, 4, 5, 6, 0]; const av = Object.fromEntries(D.availability.map((a) => [a.weekday, a]));
+    $('#view').innerHTML = `<div class="topbar"><h2>Schedule</h2></div><div class="grid g-2">
+      <div class="card glass"><h3>Classes I teach</h3><div class="list">${D.classes.length ? D.classes.map((c) => `<div class="li"><div>${esc(c.name)}<small>${DAYS[c.day_of_week]} · ${fmtTime(c.start_time)} – ${fmtTime(c.end_time)} · capacity ${c.capacity}</small></div>${badge(c.type)}</div>`).join('') : '<p class="empty">No classes assigned.</p>'}</div></div>
+      <div class="card glass"><h3>My availability</h3><p class="muted small" style="margin-bottom:10px">Members can book hourly sessions inside these windows. Leave a day blank to be unavailable.</p>
+        <form id="av">${wd.map((d) => `<div style="display:grid;grid-template-columns:90px 1fr 1fr;gap:8px;margin-bottom:8px;align-items:center"><span class="small">${DAYS[d].slice(0, 3)}</span>${timeInput('s' + d, av[d] && av[d].start_time)}${timeInput('e' + d, av[d] && av[d].end_time)}</div>`).join('')}<p class="form-err" role="alert"></p><button class="btn btn-primary sm" type="submit">Save availability</button></form></div></div>`;
+    bindForm($('#av'), async (v) => { const rows = []; for (const d of wd) if (v['s' + d] && v['e' + d]) rows.push({ weekday: d, start_time: v['s' + d], end_time: v['e' + d] }); const r = await put('/trainer/availability', { availability: rows }); toast(r.message); await load(); });
+  },
+  async checkin() {
+    $('#view').innerHTML = `<div class="topbar"><h2>Member check-in</h2></div><div class="grid g-2"><div class="card glass"><h3>Scan a member QR code</h3><div id="ci"></div></div><div class="card glass"><h3>Today's check-ins</h3><div class="list" id="ciList"></div></div></div>`;
+    const refresh = async () => { const r = await api('/attendance/today'); $('#ciList').innerHTML = r.entries.length ? r.entries.map((e) => `<div class="li"><div>${esc(e.name)}<small>${esc(e.member_code)} · in ${fmtTime(e.check_in)}${e.check_out ? ' · out ' + fmtTime(e.check_out) : ''}</small></div></div>`).join('') : '<p class="empty">No check-ins yet today.</p>'; };
+    stopCam = checkinPanel($('#ci'), refresh); refresh();
+  },
+  async alerts() { $('#view').innerHTML = `<div class="topbar"><h2>Notifications</h2></div><div class="card glass"><div class="list">${D.notifications.length ? D.notifications.map((n) => `<div class="li"><div>${esc(n.message)}<small>${fmtDate(n.created_at)}</small></div></div>`).join('') : '<p class="empty">No notifications.</p>'}</div></div>`; }
+};
+document.addEventListener('click', async (e) => {
+  const t = e.target.closest('button'); if (!t) return;
+  const act = (fn) => withBtn(t, async () => { await fn(); await load(); route(); });
+  if (t.dataset.done) return act(() => patch('/trainer/sessions/' + t.dataset.done, { status: 'completed' }));
+  if (t.dataset.cx) { if (confirm('Cancel this session? The member will be notified.')) act(() => patch('/trainer/sessions/' + t.dataset.cx, { status: 'cancelled' })); return; }
+  if (t.dataset.prog) { const r = await api('/staff/members/' + t.dataset.prog + '/progress').catch((x) => { toast(x.message, 'err'); }); if (!r) return;
+    const pts = (k) => r.entries.filter((x) => x[k] != null).map((x) => ({ label: x.date, value: x[k] }));
+    openModal(`<h3>${esc(t.dataset.name)} · progress</h3><h4 class="muted small">Weight</h4>${lineChart(pts('weight'))}<h4 class="muted small" style="margin-top:12px">Body fat</h4>${lineChart(pts('body_fat'), { unit: '%' })}`, true); }
+});
+async function load() { D = await api('/trainer/dashboard'); }
+async function route() { if (stopCam) { stopCam(); stopCam = null; } const v = (location.hash || '#today').slice(1); const k = views[v] ? v : 'today'; paintNav(k); try { await views[k](); } catch (x) { $('#view').innerHTML = `<p class="form-err">${esc(x.message)}</p>`; } }
+addEventListener('hashchange', route);
+(async () => { U = await requireRole('trainer'); await load(); route(); })();
+</script></body></html>

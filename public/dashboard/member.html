@@ -1,0 +1,165 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>My Iron Lab</title>
+<link rel="stylesheet" href="/css/theme.css"><link rel="stylesheet" href="/css/app.css"></head>
+<body>
+<div class="dash">
+  <aside class="side member" id="side"></aside>
+  <main class="main"><div id="view"><p class="muted">Loading…</p></div></main>
+</div>
+<nav class="mbar" id="mbar" aria-label="Member navigation"></nav>
+<script src="/js/vendor/qrcode.js"></script><script src="/js/app.js"></script>
+<script>
+const ICON = {
+  home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>',
+  classes: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
+  bookings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16v4a2 2 0 0 0 0 4v4H4v-4a2 2 0 0 0 0-4z"/><path d="M14 7v12" stroke-dasharray="2 2"/></svg>',
+  membership: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M7 15h4"/></svg>',
+  profile: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/></svg>'
+};
+const NAV = [['home', 'Home'], ['classes', 'Classes'], ['bookings', 'Bookings'], ['membership', 'Membership'], ['profile', 'Profile']];
+let U, D, FILTER = 'All', CYCLE = 'monthly';
+
+function paintNav(cur) {
+  const active = ['home', 'classes', 'bookings', 'membership', 'profile'].includes(cur) ? cur : cur === 'trainers' ? 'bookings' : 'home';
+  $('#side').innerHTML = '<a href="/" class="logo">IRON<span>LAB</span></a>' +
+    [...NAV.slice(0, 3), ['trainers', 'Trainers'], NAV[3], ['progress', 'Progress'], NAV[4]].map(([k, t]) => `<a class="nav-i ${cur === k ? 'on' : ''}" href="#${k}">${t}${k === 'home' && D && D.unread ? `<span class="badge b-new">${D.unread}</span>` : ''}</a>`).join('') +
+    `<div class="who"><strong style="color:var(--white)">${esc(U.name)}</strong><br><button class="link" onclick="logout()">Log out</button></div>`;
+  $('#mbar').innerHTML = NAV.map(([k, t]) => `<a href="#${k}" class="${active === k ? 'on' : ''}">${ICON[k]}${t}</a>`).join('');
+}
+const planLine = (m) => !m ? '' : m.is_active ? (m.days_left <= 7 ? `Expires in ${m.days_left} day${m.days_left === 1 ? '' : 's'}` : `Active until ${fmtDate(m.expiration_date)}`) : 'Expired';
+
+const views = {
+  async home() {
+    const m = D.membership, cls = D.upcoming_classes, ses = D.upcoming_sessions, first = D.user.name.split(' ')[0];
+    $('#view').innerHTML = `
+      <div class="topbar"><h2>Hey ${esc(first)}.</h2><div>${!D.user.email_verified ? '<span class="badge b-pending">Email not verified</span>' : ''}</div></div>
+      ${!m || !m.is_active ? `<div class="card glass" style="margin-bottom:16px;border-color:var(--accent)"><h3>${m ? 'Your membership has expired' : 'Choose a membership to get started'}</h3><p class="muted" style="margin-bottom:14px">An active membership is required to book classes and check in.</p><a class="btn btn-primary" href="#membership">${m ? 'Renew now' : 'View memberships'}</a></div>` : ''}
+      <div class="quick" style="margin-bottom:16px"><a href="#classes">Book class</a><a href="#trainers">Book trainer</a><a href="#membership">View membership</a><a href="#membership">Make payment</a><a href="#classes">View schedule</a></div>
+      <div class="grid g-4 keep2" style="margin-bottom:16px">
+        <div class="card glass kpi"><b>${D.streak}</b><span>Day streak</span></div>
+        <div class="card glass kpi"><b>${D.attendance_30d}</b><span>Visits · 30 days</span></div>
+        <div class="card glass kpi"><b>${cls.length + ses.length}</b><span>Upcoming bookings</span></div>
+        <div class="card glass kpi"><b>${m && m.is_active ? m.days_left : '—'}</b><span>Days of membership left</span></div>
+      </div>
+      <div class="grid g-2">
+        <div class="card glass"><h3>Membership</h3>${m ? `<div style="display:flex;justify-content:space-between;align-items:center"><div><strong style="color:var(--white);font-size:18px">${esc(m.plan_name)}</strong><br><span class="muted small">${esc(planLine(m))}${m.is_active && !m.will_renew ? ' · will not renew' : ''}</span></div>${badge(m.is_active ? 'active' : 'expired')}</div>
+          ${m.is_active ? `<div class="progressbar" style="margin:14px 0 4px"><i style="width:${Math.min(100, Math.max(4, 100 - (m.days_left / (m.billing_cycle === 'yearly' ? 365 : 31)) * 100))}%"></i></div><span class="small muted">Renewal date: ${m.will_renew ? fmtDate(m.renewal_date) : 'none (cancelled)'}</span>` : ''}` : '<p class="empty">No membership yet.</p>'}</div>
+        <div class="card glass"><h3>Upcoming classes</h3><div class="list">${cls.length ? cls.slice(0, 5).map((c) => `<div class="li"><div>${esc(c.name)}<small>${fmtDate(c.class_date)} · ${fmtTime(c.start_time)} · ${esc(c.location)}</small></div>${badge(c.status)}</div>`).join('') : '<p class="empty">Nothing booked. <a class="link" href="#classes">Browse classes</a></p>'}</div></div>
+        <div class="card glass"><h3>Personal training</h3><div class="list">${ses.length ? ses.slice(0, 5).map((s) => `<div class="li"><div>${esc(s.trainer_name)}<small>${fmtDate(s.date)} · ${fmtTime(s.start_time)}</small></div>${badge('booked')}</div>`).join('') : '<p class="empty">No sessions booked. <a class="link" href="#trainers">Find a trainer</a></p>'}</div></div>
+        <div class="card glass"><h3>Notifications ${D.unread ? '<button class="link small" id="markRead">Mark all read</button>' : ''}</h3><div class="list">${D.notifications.length ? D.notifications.slice(0, 6).map((n) => `<div class="li"><div style="${n.read ? 'opacity:.6' : ''}">${esc(n.message)}<small>${fmtDate(n.created_at)}</small></div></div>`).join('') : '<p class="empty">You are all caught up.</p>'}</div></div>
+        <div class="card glass"><h3>Recent attendance</h3><div class="list">${D.attendance.length ? D.attendance.slice(0, 6).map((a) => `<div class="li"><div>${fmtDate(a.date)}<small>In ${fmtTime(a.check_in)}${a.check_out ? ' · out ' + fmtTime(a.check_out) : ''}</small></div></div>`).join('') : '<p class="empty">No visits yet. Show your QR code at the front desk.</p>'}</div></div>
+        <div class="card glass"><h3>Workout history</h3><div class="list">${D.history.length ? D.history.slice(0, 6).map((h) => `<div class="li"><div>${esc(h.name)}<small>${fmtDate(h.date)} · ${esc(h.type)}</small></div></div>`).join('') : '<p class="empty">Completed classes will appear here.</p>'}</div></div>
+      </div>`;
+    const mr = $('#markRead'); if (mr) mr.onclick = async () => { await api('/me/notifications/read', { body: {} }); await load(); route(); };
+  },
+
+  async classes() {
+    const { classes } = await api('/classes'); const types = ['All', ...new Set(classes.map((c) => c.type))];
+    $('#view').innerHTML = `<div class="topbar"><h2>Classes</h2></div>
+      <div class="tabs">${types.map((t) => `<button class="chip ${t === FILTER ? 'on' : ''}" data-f="${esc(t)}">${esc(t)}</button>`).join('')}</div>
+      <div class="grid g-3">${classes.filter((c) => FILTER === 'All' || c.type === FILTER).map((c) => `
+        <div class="card glass"><div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:8px"><span class="muted small">${esc(c.day_name)} · ${fmtDate(c.class_date)}</span>${badge(c.type)}</div>
+          <h3 style="margin-bottom:4px">${esc(c.name)}</h3>
+          <p class="muted small">${fmtTime(c.start_time)} – ${fmtTime(c.end_time)} · ${esc(c.trainer_name || 'Iron Lab coach')} · ${esc(c.location)}</p>
+          <p style="margin:12px 0;font-size:14px"><strong style="color:var(--white)">${c.booked} / ${c.capacity}</strong> spots booked · ${c.full ? '<span style="color:#ff8a8f">FULLY BOOKED</span>' : `${c.remaining} spot${c.remaining === 1 ? '' : 's'} remaining`}${c.waitlist ? ` · ${c.waitlist} waiting` : ''}</p>
+          ${c.my_status ? `<button class="btn btn-outline btn-block sm" data-cancel="${c.id}">${c.my_status === 'booked' ? 'Booked · Cancel' : 'On waitlist · Leave'}</button>`
+            : `<button class="btn ${c.full ? 'btn-outline' : 'btn-primary'} btn-block sm" data-book="${c.id}" data-wl="${c.full ? 1 : 0}">${c.full ? 'Join waitlist' : 'Reserve spot'}</button>`}
+        </div>`).join('')}</div>`;
+  },
+
+  async bookings() {
+    $('#view').innerHTML = `<div class="topbar"><h2>Bookings</h2><a class="btn btn-primary sm" href="#trainers">Book a trainer</a></div>
+      <div class="grid g-2">
+        <div class="card glass"><h3>Upcoming classes</h3><div class="list">${D.upcoming_classes.length ? D.upcoming_classes.map((c) => `<div class="li"><div>${esc(c.name)}<small>${fmtDate(c.class_date)} · ${fmtTime(c.start_time)}</small></div><div>${badge(c.status)} <button class="btn btn-outline sm danger" data-cancel="${c.class_id}">Cancel</button></div></div>`).join('') : '<p class="empty">No upcoming classes.</p>'}</div></div>
+        <div class="card glass"><h3>Upcoming sessions</h3><div class="list">${D.upcoming_sessions.length ? D.upcoming_sessions.map((s) => `<div class="li"><div>${esc(s.trainer_name)}<small>${fmtDate(s.date)} · ${fmtTime(s.start_time)} · ${s.price ? money(s.price) : 'Included'}</small></div><button class="btn btn-outline sm danger" data-cancel-session="${s.id}">Cancel</button></div>`).join('') : '<p class="empty">No upcoming sessions.</p>'}</div></div>
+        <div class="card glass" style="grid-column:1/-1"><h3>History</h3><div class="list">${D.history.length ? D.history.map((h) => `<div class="li"><div>${esc(h.name)}<small>${fmtDate(h.date)} · ${esc(h.type)}</small></div></div>`).join('') : '<p class="empty">No past bookings yet.</p>'}</div></div>
+      </div>`;
+  },
+
+  async trainers() {
+    const { trainers } = await api('/trainers');
+    $('#view').innerHTML = `<div class="topbar"><h2>Personal training</h2></div><div class="grid g-3">${trainers.map((t) => `
+      <div class="card glass"><h3 style="margin-bottom:2px">${esc(t.name)}</h3><p style="color:var(--accent);font-size:13px;font-weight:600;margin-bottom:8px">${esc(t.specialty)}</p>
+        <p class="muted small" style="margin-bottom:8px">${t.experience_years} years · ${esc(t.certifications || '')}</p><p class="small" style="margin-bottom:14px">${esc(t.bio)}</p>
+        <button class="btn btn-primary btn-block sm" data-trainer="${t.id}" data-name="${esc(t.name)}" data-price="${t.session_price}">Book session · ${money(t.session_price)}</button></div>`).join('')}</div>`;
+  },
+
+  async membership() {
+    const { plans } = await api('/plans'); const m = D.membership; const base = plans.filter((p) => !/ Annual$/.test(p.name));
+    $('#view').innerHTML = `<div class="topbar"><h2>Membership</h2>${m && m.is_active && m.will_renew ? '<button class="btn btn-outline sm danger" id="cancelM">Cancel renewal</button>' : ''}</div>
+      ${m ? `<div class="card glass" style="margin-bottom:16px"><div style="display:flex;justify-content:space-between;align-items:center"><div><strong style="color:var(--white);font-size:22px">${esc(m.plan_name)}</strong><br><span class="muted small">${esc(planLine(m))} · started ${fmtDate(m.start_date)} · ${esc(m.billing_cycle)} · payment ${esc(m.payment_status)}</span></div>${badge(m.is_active ? 'active' : m.status)}</div></div>` : ''}
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap"><span class="muted small">Billing</span><div class="tabs" style="margin:0"><button class="chip ${CYCLE === 'monthly' ? 'on' : ''}" data-cycle="monthly">Monthly</button><button class="chip ${CYCLE === 'yearly' ? 'on' : ''}" data-cycle="yearly">Yearly (2 months free)</button></div></div>
+      <div class="grid g-3" style="margin-bottom:22px">${base.map((p) => { const cur = m && m.is_active && m.plan_id === p.id; const rank = (x) => base.findIndex((b) => b.id === x);
+        const label = !m || !m.is_active ? 'Choose ' + p.name : cur ? 'Renew' : rank(p.id) > rank(m.plan_id) ? 'Upgrade' : 'Downgrade';
+        return `<div class="card glass" ${cur ? 'style="border-color:var(--accent)"' : ''}><h3 style="margin-bottom:4px">${esc(p.name)}</h3><p class="muted small" style="margin-bottom:10px">${esc(p.description)}</p>
+          <div class="kpi" style="margin-bottom:12px"><b class="price" data-m="${p.monthly_price}" data-y="${p.yearly_price}">${money(CYCLE === 'yearly' ? p.yearly_price : p.monthly_price)}</b><span class="per">${CYCLE === 'yearly' ? 'per year' : 'per month'}</span></div>
+          <ul class="muted small" style="margin:0 0 14px 18px"><li>Classes: ${esc(p.classes_included)}</li><li>Personal training: ${p.pt_sessions_included} / month</li><li>Guest passes: ${p.guest_passes > 100 ? 'Unlimited' : p.guest_passes}</li><li>Recovery: ${esc(p.recovery_access)}</li></ul>
+          <button class="btn ${cur ? 'btn-outline' : 'btn-primary'} btn-block sm" data-plan="${p.id}">${label}</button></div>`; }).join('')}</div>
+      <div class="card glass"><h3>Payment history</h3><div class="tbl"><table><thead><tr><th>Date</th><th>Receipt</th><th>Transaction</th><th>Amount</th><th>Status</th><th></th></tr></thead><tbody>
+        ${D.payments.length ? D.payments.map((p) => `<tr><td>${fmtDate(p.created_at)}</td><td>${esc(p.receipt)}</td><td class="muted small">${esc(p.provider_txn_id || '—')}</td><td>${money(p.amount)}</td><td>${badge(p.status)}</td><td><button class="link small" data-receipt="${p.id}">View</button></td></tr>`).join('') : '<tr><td colspan="6" class="empty">No payments yet.</td></tr>'}</tbody></table></div></div>`;
+    const cm = $('#cancelM'); if (cm) cm.onclick = () => { if (confirm('Stop renewal? You keep full access until your current period ends.')) withBtn(cm, async () => { const r = await api('/memberships/cancel', { body: {} }); toast(r.message); await load(); route(); }); };
+  },
+
+  async progress() {
+    const { entries } = await api('/me/progress');
+    const pts = (k) => entries.filter((e) => e[k] != null).map((e) => ({ label: e.date, value: e[k] }));
+    const weeks = {}; D.attendance.forEach((a) => { const d = new Date(a.date + 'T00:00:00'); d.setDate(d.getDate() - d.getDay()); const k = L2(d); weeks[k] = (weeks[k] || 0) + 1; });
+    const wk = Object.entries(weeks).sort().map(([label, value]) => ({ label, value }));
+    $('#view').innerHTML = `<div class="topbar"><h2>Progress</h2></div>
+      <div class="grid g-2"><div class="card glass"><h3>Log today</h3><form id="pf"><div class="row2" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">${field('Weight', 'weight', { type: 'number', step: '0.1' })}${field('Body fat %', 'body_fat', { type: 'number', step: '0.1' })}</div>${field('Notes / personal records', 'notes', { area: true, max: 300 })}<p class="form-err" role="alert"></p><button class="btn btn-primary" type="submit">Save entry</button></form></div>
+        <div class="card glass"><h3>Weight</h3>${lineChart(pts('weight'))}</div>
+        <div class="card glass"><h3>Body fat</h3>${lineChart(pts('body_fat'), { unit: '%' })}</div>
+        <div class="card glass"><h3>Workout consistency (visits per week)</h3>${wk.length ? barChart(wk) : '<p class="empty">Check in at the gym to build your consistency chart.</p>'}</div>
+        <div class="card glass" style="grid-column:1/-1"><h3>Journal</h3><div class="list">${entries.slice().reverse().filter((e) => e.notes).map((e) => `<div class="li"><div>${esc(e.notes)}<small>${fmtDate(e.date)}</small></div></div>`).join('') || '<p class="empty">Notes you save appear here. Only you and trainers you train with can see this page.</p>'}</div></div></div>`;
+    bindForm($('#pf'), async (v) => { await api('/me/progress', { body: v }); toast('Progress saved.'); views.progress(); });
+  },
+
+  async profile() {
+    const u = D.user;
+    $('#view').innerHTML = `<div class="topbar"><h2>Profile</h2></div><div class="grid g-2">
+      <div class="card glass"><h3>My check-in code</h3><p class="muted small" style="margin-bottom:12px">Show this at the front desk. Staff scan it to record your visit.</p><div class="qrbox">${qrSvg(u.member_code, 200)}</div><p style="margin-top:10px;font-family:var(--font-d);font-size:24px;color:var(--white);letter-spacing:.06em">${esc(u.member_code)}</p></div>
+      <div class="card glass"><h3>Details</h3><div style="display:flex;gap:14px;align-items:center;margin-bottom:16px">${u.photo_url ? `<img class="avatar" src="${esc(u.photo_url)}" alt="">` : `<div class="avatar">${esc(u.name[0])}</div>`}<label class="btn btn-outline sm" style="cursor:pointer">Upload photo<input id="photo" type="file" accept="image/jpeg,image/png,image/webp" hidden></label></div>
+        <form id="prof">${field('Full name', 'name', { value: u.name, required: 1 })}${field('Phone', 'phone', { value: u.phone || '', type: 'tel' })}<p class="muted small" style="margin-bottom:10px">Email: ${esc(u.email)} ${u.email_verified ? badge('active') : badge('pending')}</p><p class="form-err" role="alert"></p><button class="btn btn-primary" type="submit">Save changes</button></form></div>
+      <div class="card glass"><h3>Change password</h3><form id="pw">${field('Current password', 'current', { type: 'password', required: 1, autocomplete: 'current-password' })}${field('New password', 'password', { type: 'password', required: 1, autocomplete: 'new-password' })}<p class="form-err" role="alert"></p><button class="btn btn-outline" type="submit">Update password</button></form></div>
+      <div class="card glass"><h3>Account</h3><p class="muted small" style="margin-bottom:14px">Signed in as ${esc(u.email)}</p><button class="btn btn-outline danger" onclick="logout()">Log out</button></div></div>`;
+    bindForm($('#prof'), async (v) => { await patch('/auth/profile', v); toast('Profile updated.'); await load(); });
+    bindForm($('#pw'), async (v, f) => { await api('/auth/change-password', { body: v }); toast('Password updated.'); f.reset(); });
+    $('#photo').onchange = async (e) => { const f = e.target.files[0]; if (!f) return; if (f.size > 3 * 1024 * 1024) return toast('Please choose an image under 3 MB.', 'err');
+      const data = await new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(f); });
+      try { await api('/auth/photo', { body: { image: data } }); toast('Photo updated.'); await load(); views.profile(); } catch (x) { toast(x.message, 'err'); } };
+  }
+};
+const L2 = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+
+/* ---------- actions (event delegation) ---------- */
+document.addEventListener('click', async (e) => {
+  const t = e.target.closest('button'); if (!t) return;
+  const run = (fn, msg) => withBtn(t, async () => { const r = await fn(); toast(r.message || msg); await load(); await route(); });
+  if (t.dataset.f) { FILTER = t.dataset.f; return views.classes(); }
+  if (t.dataset.book) return run(() => api(`/classes/${t.dataset.book}/book`, { body: { waitlist: t.dataset.wl === '1' } })).catch((x) => { if (x.status === 402) location.hash = '#membership'; });
+  if (t.dataset.cancel) { if (confirm('Cancel this booking?')) run(() => api(`/classes/${t.dataset.cancel}/cancel`, { body: {} }), 'Cancelled.'); return; }
+  if (t.dataset.cancelSession) { if (confirm('Cancel this session?')) run(() => api(`/sessions/${t.dataset.cancelSession}/cancel`, { body: {} }), 'Session cancelled.'); return; }
+  if (t.dataset.cycle) { CYCLE = t.dataset.cycle; return views.membership(); }
+  if (t.dataset.plan) {
+    const plans = (await api('/plans')).plans; const p = plans.find((x) => x.id == t.dataset.plan); const amt = CYCLE === 'yearly' ? p.yearly_price : p.monthly_price;
+    const box = openModal(`<h3>Confirm ${esc(p.name)}</h3><p class="sub">${money(amt)} · billed ${CYCLE}. You'll be taken to secure checkout; card details never touch our servers.</p><button class="btn btn-primary btn-block" id="pay">Pay ${money(amt)}</button>`);
+    $('#pay', box).onclick = (ev) => withBtn(ev.target, async () => { const r = await api('/memberships/purchase', { body: { plan_id: p.id, billing_cycle: CYCLE } }); if (r.redirect_url) { location.href = r.redirect_url; return; } closeModal(); toast(r.message); await load(); route(); });
+    return;
+  }
+  if (t.dataset.receipt) { const p = D.payments.find((x) => x.id == t.dataset.receipt); openModal(`<h3>Receipt ${esc(p.receipt)}</h3><div class="list"><div class="li"><span>Amount</span><strong>${money(p.amount)} ${esc(p.currency.toUpperCase())}</strong></div><div class="li"><span>Status</span>${badge(p.status)}</div><div class="li"><span>Transaction ID</span><span class="small">${esc(p.provider_txn_id || '—')}</span></div><div class="li"><span>Date</span><span>${fmtDate(p.created_at)}</span></div></div><button class="btn btn-outline btn-block" style="margin-top:16px" onclick="window.print()">Print</button>`); return; }
+  if (t.dataset.trainer) {
+    const id = t.dataset.trainer;
+    const box = openModal(`<h3>Book ${esc(t.dataset.name)}</h3><p class="sub">${money(t.dataset.price)} per 60-minute session. Sessions included in your plan are free.</p>${field('Date', 'date', { type: 'date', min: today(), value: today() })}<div id="slots" class="tabs"></div><p class="form-err" role="alert"></p><div id="slotAct"></div>`, true);
+    let chosen = null;
+    const loadSlots = async () => { chosen = null; $('#slotAct', box).innerHTML = ''; try { const s = await api(`/trainers/${id}/slots?date=${$('#f_date', box).value}`); $('#slots', box).innerHTML = s.slots.length ? s.slots.map((x) => `<button class="chip" ${x.available ? '' : 'disabled style="opacity:.35;text-decoration:line-through"'} data-slot="${x.start_time}">${fmtTime(x.start_time)}</button>`).join('') : '<p class="empty">No availability on this day.</p>'; } catch (x) { $('.form-err', box).textContent = x.message; } };
+    $('#f_date', box).onchange = loadSlots; loadSlots();
+    box.addEventListener('click', (ev) => { const b = ev.target.closest('[data-slot]'); if (!b || b.disabled) return; $$('[data-slot]', box).forEach((x) => x.classList.toggle('on', x === b)); chosen = b.dataset.slot;
+      $('#slotAct', box).innerHTML = '<button class="btn btn-primary btn-block" id="confirmSlot">Confirm booking</button>';
+      $('#confirmSlot', box).onclick = (e2) => withBtn(e2.target, async () => { try { const r = await api(`/trainers/${id}/book`, { body: { date: $('#f_date', box).value, start_time: chosen } }); if (r.redirect_url) { location.href = r.redirect_url; return; } closeModal(); toast(r.message); await load(); location.hash = '#bookings'; route(); } catch (x) { $('.form-err', box).textContent = x.message; await loadSlots(); throw x; } }); });
+  }
+});
+
+async function load() { D = await api('/me/dashboard'); U = D.user; }
+async function route() { const v = (location.hash || '#home').slice(1); const k = views[v] ? v : 'home'; paintNav(k); try { await views[k](); } catch (x) { $('#view').innerHTML = `<p class="form-err">${esc(x.message)}</p>`; } }
+addEventListener('hashchange', () => { route(); window.scrollTo(0, 0); });
+(async () => { await requireRole('member'); await load(); const q = new URLSearchParams(location.search); if (q.get('paid')) toast('Payment received — thank you!'); if (q.get('cancelled')) toast('Checkout was cancelled.', 'err'); route(); })();
+</script></body></html>

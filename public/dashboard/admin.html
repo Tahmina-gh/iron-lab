@@ -1,0 +1,132 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Admin · Iron Lab</title>
+<link rel="stylesheet" href="/css/theme.css"><link rel="stylesheet" href="/css/app.css"></head>
+<body><div class="dash"><aside class="side" id="side"></aside><main class="main"><div id="view"><p class="muted">Loading…</p></div></main></div>
+<script src="/js/vendor/qrcode.js"></script><script src="/js/vendor/jsQR.js"></script><script src="/js/app.js"></script>
+<script>
+const TABS = [['overview', 'Overview'], ['members', 'Members'], ['bookings', 'Bookings & leads'], ['messages', 'Messages'], ['attendance', 'Attendance'], ['plans', 'Plans'], ['classes', 'Classes'], ['trainers', 'Trainers'], ['site', 'Site content'], ['testimonials', 'Testimonials'], ['facilities', 'Facilities'], ['faqs', 'FAQs']];
+let U, stopCam = null, MS = { q: '', status: '', page: 1 }, BK = { type: 'class', q: '', date: '', status: '' }, TR = [];
+function paintNav(cur) { $('#side').innerHTML = '<a href="/" class="logo">IRON<span>LAB</span></a>' + TABS.map(([k, t]) => `<a class="nav-i ${cur === k ? 'on' : ''}" href="#${k}">${t}</a>`).join('') + `<div class="who"><strong style="color:var(--white)">${esc(U.name)}</strong><br><span class="muted">Administrator</span><br><button class="link" onclick="logout()">Log out</button></div>`; }
+const pageHead = (t, right = '') => `<div class="topbar"><h2>${t}</h2><div>${right}</div></div>`;
+const STAT = { class: ['booked', 'cancelled', 'completed'], trainer: ['booked', 'cancelled', 'completed'], trial: ['new', 'contacted', 'trial_booked', 'trial_completed', 'converted', 'not_interested'], tour: ['pending', 'approved', 'rescheduled', 'cancelled', 'completed'] };
+const sel = (name, opts, cur, extra = '', all = null) => `<select ${extra} name="${name}">${all ? `<option value="" ${cur === '' ? 'selected' : ''}>${all}</option>` : ''}${opts.map((o) => `<option value="${o}" ${o === cur ? 'selected' : ''}>${esc(String(o).replace(/_/g, ' '))}</option>`).join('')}</select>`;
+const readFile = (f) => new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(f); });
+const timeInput = (n, v) => `<input type="time" name="${n}" value="${v || ''}">`;
+
+/* ------- generic CRUD editor used for plans, classes, testimonials, facilities, FAQs ------- */
+const CRUD = {
+  plans: { title: 'Membership plans', ep: 'plans', cols: [['name', 'Plan'], ['monthly_price', 'Monthly', money], ['yearly_price', 'Yearly', money], ['classes_included', 'Classes'], ['pt_sessions_included', 'PT / mo'], ['status', 'Status', badge]],
+    fields: [['name', 'Name'], ['description', 'Description', 'area'], ['monthly_price', 'Monthly price', 'number'], ['yearly_price', 'Yearly price', 'number'], ['classes_included', 'Classes included'], ['pt_sessions_included', 'Personal training sessions / month', 'number'], ['guest_passes', 'Guest passes (999 = unlimited)', 'number'], ['recovery_access', 'Recovery access'], ['benefits', 'Benefits (comma separated)', 'area'], ['status', 'Status', ['active', 'retired']]] },
+  classes: { title: 'Classes', ep: 'classes', cols: [['name', 'Class'], ['type', 'Type'], ['day_of_week', 'Day', (v) => DAYS[v]], ['start_time', 'Start', fmtTime], ['capacity', 'Capacity'], ['status', 'Status', badge]],
+    fields: () => [['name', 'Name'], ['type', 'Type', ['Strength', 'HIIT', 'Yoga', 'Boxing', 'Cardio', 'CrossFit', 'Mobility', 'Functional Training']], ['trainer_id', 'Trainer', TR], ['day_of_week', 'Day of week', DAYS.map((d, i) => [i, d])], ['start_time', 'Start time', 'time'], ['end_time', 'End time', 'time'], ['capacity', 'Capacity', 'number'], ['difficulty', 'Difficulty', ['All levels', 'Beginner', 'Intermediate', 'Advanced']], ['location', 'Location'], ['image_url', 'Image', 'image'], ['description', 'Description', 'area'], ['status', 'Status', ['active', 'cancelled']]] },
+  testimonials: { title: 'Testimonials', ep: 'testimonials', cols: [['member_name', 'Member'], ['goal', 'Goal'], ['duration', 'Duration'], ['rating', 'Rating'], ['published', 'Published', (v) => badge(v ? 'active' : 'pending')]],
+    fields: [['member_name', 'Member name'], ['goal', 'Goal'], ['duration', 'Duration'], ['result', 'Result', 'area'], ['rating', 'Rating (1–5)', 'number'], ['photo_url', 'Photo', 'image'], ['published', 'Published', [[0, 'Hidden'], [1, 'Published']]]] },
+  facilities: { title: 'Facilities', ep: 'facilities', cols: [['name', 'Facility'], ['description', 'Description'], ['sort_order', 'Order']], fields: [['name', 'Name'], ['description', 'Description', 'area'], ['image_url', 'Image', 'image'], ['sort_order', 'Sort order', 'number']] },
+  faqs: { title: 'FAQs', ep: 'faqs', cols: [['question', 'Question'], ['sort_order', 'Order']], fields: [['question', 'Question'], ['answer', 'Answer', 'area'], ['sort_order', 'Sort order', 'number']] }
+};
+function fieldHtml(f, val) { const [n, l, t] = f; if (Array.isArray(t)) return field(l, n, { options: t, value: val }); if (t === 'area') return field(l, n, { area: 1, value: val });
+  if (t === 'image') return `<div class="field"><label>${l}</label><div style="display:flex;gap:8px"><input id="f_${n}" name="${n}" value="${esc(val)}" placeholder="https://… or upload" style="flex:1"><label class="btn btn-outline sm" style="cursor:pointer">Upload<input type="file" accept="image/jpeg,image/png,image/webp" hidden data-up="${n}"></label></div></div>`;
+  return field(l, n, { type: t || 'text', value: val, step: t === 'number' ? 'any' : undefined }); }
+async function crudView(key) {
+  const c = CRUD[key]; if (key === 'classes') TR = (await api('/admin/trainers')).rows.map((t) => [t.id, t.name]);
+  const fields = typeof c.fields === 'function' ? c.fields() : c.fields; const { rows } = await api('/admin/' + c.ep);
+  $('#view').innerHTML = pageHead(c.title, '<button class="btn btn-primary sm" id="add">Add new</button>') + `<div class="card glass"><div class="tbl"><table><thead><tr>${c.cols.map((x) => `<th>${x[1]}</th>`).join('')}<th></th></tr></thead><tbody>${rows.length ? rows.map((r) => `<tr>${c.cols.map((x) => `<td>${x[2] ? x[2](r[x[0]]) : esc(r[x[0]])}</td>`).join('')}<td class="right"><button class="btn btn-outline sm" data-edit="${r.id}">Edit</button> <button class="btn btn-outline sm danger" data-del="${r.id}">Delete</button></td></tr>`).join('') : `<tr><td colspan="${c.cols.length + 1}" class="empty">Nothing here yet.</td></tr>`}</tbody></table></div></div>`;
+  const form = (row) => { const box = openModal(`<h3>${row ? 'Edit' : 'Add'} ${c.title.toLowerCase().replace(/s$/, '')}</h3><form id="cf">${fields.map((f) => fieldHtml(f, row ? row[f[0]] : '')).join('')}<p class="form-err" role="alert"></p><button class="btn btn-primary btn-block" type="submit">Save</button></form>`, true);
+    $$('[data-up]', box).forEach((i) => i.onchange = async () => { const f = i.files[0]; if (!f) return; try { const r = await api('/admin/upload', { body: { image: await readFile(f) } }); $('#f_' + i.dataset.up, box).value = r.url; toast('Uploaded.'); } catch (x) { toast(x.message, 'err'); } });
+    bindForm($('#cf', box), async (v) => { if (row) await put(`/admin/${c.ep}/${row.id}`, v); else await api('/admin/' + c.ep, { body: v }); closeModal(); toast('Saved.'); crudView(key); }); };
+  $('#add').onclick = () => form(null);
+  $$('[data-edit]').forEach((b) => b.onclick = () => form(rows.find((r) => r.id == b.dataset.edit)));
+  $$('[data-del]').forEach((b) => b.onclick = () => { if (confirm('Delete this item?')) withBtn(b, async () => { await del(`/admin/${c.ep}/${b.dataset.del}`); toast('Deleted.'); crudView(key); }); });
+}
+
+const views = {
+  async overview() {
+    const s = await api('/admin/stats'); const k = s.kpis;
+    const K = [['Total members', k.total_members], ['Active members', k.active_members], ['New this month', k.new_members], ["Today's attendance", k.todays_attendance], ["Today's bookings", k.todays_bookings], ['Monthly revenue', money(k.monthly_revenue)], ['Pending payments', k.pending_payments, k.pending_payments > 0], ['Free-trial leads (new)', k.free_trial_leads, k.free_trial_leads > 0], ['Upcoming tours', k.tour_bookings], ['Unread messages', k.unread_messages, k.unread_messages > 0]];
+    const a = s.analytics, ev = a.events || {};
+    $('#view').innerHTML = pageHead('Overview') + `<div class="grid g-4 keep2" style="margin-bottom:16px">${K.map(([l, v, w]) => `<div class="card glass kpi ${w ? 'warn' : ''}"><b>${v}</b><span>${l}</span></div>`).join('')}</div>
+      <div class="grid g-2"><div class="card glass"><h3>Revenue (6 months)</h3>${barChart(s.charts.revenue, { fmt: money })}</div><div class="card glass"><h3>Membership growth</h3>${barChart(s.charts.member_growth)}</div>
+      <div class="card glass"><h3>Attendance (14 days)</h3>${barChart(s.charts.attendance)}</div><div class="card glass"><h3>Class bookings (14 days)</h3>${barChart(s.charts.bookings)}</div>
+      <div class="card glass"><h3>New leads (6 months)</h3>${barChart(s.charts.leads)}</div>
+      <div class="card glass"><h3>Business analytics</h3><div class="list">${[['Page views', ev.page_view], ['Trial submissions', ev.trial_submit], ['Tour bookings', ev.tour_book], ['Membership purchases', ev.membership_purchase], ['Class bookings', ev.class_book], ['Trainer bookings', ev.trainer_book]].map(([l, v]) => `<div class="li"><span>${l}</span><strong style="color:var(--white)">${v || 0}</strong></div>`).join('')}<div class="li"><span>Visit → trial rate</span><strong style="color:var(--white)">${a.conversion.trial_rate == null ? '—' : a.conversion.trial_rate + '%'}</strong></div><div class="li"><span>Visit → purchase rate</span><strong style="color:var(--white)">${a.conversion.purchase_rate == null ? '—' : a.conversion.purchase_rate + '%'}</strong></div></div><p class="muted small" style="margin-top:8px">Event counts only; no personal data is collected.</p></div></div>`;
+  },
+
+  async members() {
+    const r = await api(`/admin/members?q=${encodeURIComponent(MS.q)}&status=${MS.status}&page=${MS.page}`);
+    $('#view').innerHTML = pageHead('Members', `<span class="muted">${r.total} total</span>`) + `<form class="bar-filter" id="mf"><input name="q" placeholder="Search name, email or code" value="${esc(MS.q)}">${sel('status', ['active', 'suspended'], MS.status, '', 'All statuses')}<button class="btn btn-outline sm" type="submit">Search</button></form>
+      <div class="card glass"><div class="tbl"><table><thead><tr><th>Name</th><th>Email</th><th>Plan</th><th>Expires</th><th>Status</th><th></th></tr></thead><tbody>${r.members.map((m) => `<tr><td>${esc(m.name)}<br><span class="muted small">${esc(m.member_code)}</span></td><td class="muted">${esc(m.email)}</td><td>${esc(m.plan || '—')}</td><td>${m.expires ? fmtDate(m.expires) : '—'}</td><td>${badge(m.status)}</td><td class="right"><button class="btn btn-outline sm" data-view="${m.id}">View</button></td></tr>`).join('') || '<tr><td colspan="6" class="empty">No members match.</td></tr>'}</tbody></table></div>
+      <div class="pager"><button class="btn btn-outline sm" id="pp" ${r.page <= 1 ? 'disabled' : ''}>Prev</button>Page ${r.page} of ${r.pages}<button class="btn btn-outline sm" id="pn" ${r.page >= r.pages ? 'disabled' : ''}>Next</button></div></div>`;
+    $('#mf').onsubmit = (e) => { e.preventDefault(); const f = new FormData(e.target); MS = { q: f.get('q'), status: f.get('status'), page: 1 }; views.members(); };
+    $('#pp').onclick = () => { MS.page--; views.members(); }; $('#pn').onclick = () => { MS.page++; views.members(); };
+  },
+
+  async bookings() {
+    const q = `type=${BK.type}&q=${encodeURIComponent(BK.q)}&date=${BK.date}&status=${BK.status}`; const { rows } = await api('/admin/bookings?' + q);
+    const T = [['class', 'Classes'], ['trainer', 'Trainer sessions'], ['trial', 'Free-trial leads'], ['tour', 'Tours']];
+    $('#view').innerHTML = pageHead('Bookings & leads') + `<div class="tabs">${T.map(([k, t]) => `<button class="chip ${BK.type === k ? 'on' : ''}" data-type="${k}">${t}</button>`).join('')}</div>
+      <form class="bar-filter" id="bf"><input name="q" placeholder="Search member / class / trainer" value="${esc(BK.q)}"><input type="date" name="date" value="${esc(BK.date)}">${sel('status', STAT[BK.type], BK.status, '', 'All statuses')}<button class="btn btn-outline sm" type="submit">Filter</button></form>
+      <div class="card glass"><div class="tbl"><table><thead><tr><th>Date</th><th>Time</th><th>${BK.type === 'trial' ? 'Goal' : 'Item'}</th><th>Person</th><th>Contact</th><th>Status</th><th></th></tr></thead><tbody>${rows.map((r) => `<tr><td>${fmtDate(r.date)}</td><td>${fmtTime(r.time) || '—'}</td><td>${esc(r.title || '')}</td><td>${esc(r.member)}</td><td class="muted small">${esc(r.email || '')}${r.phone ? '<br>' + esc(r.phone) : ''}</td><td>${badge(r.status)}</td>
+        <td class="right"><select data-st="${r.id}">${STAT[BK.type].map((s) => `<option ${s === r.status ? 'selected' : ''} value="${s}">${s.replace(/_/g, ' ')}</option>`).join('')}</select>${BK.type === 'tour' ? ` <button class="btn btn-outline sm" data-resched="${r.id}">Reschedule</button>` : ''}${r.email ? ` <a class="btn btn-outline sm" href="mailto:${esc(r.email)}">Contact</a>` : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">Nothing found.</td></tr>'}</tbody></table></div></div>`;
+    $$('[data-type]').forEach((b) => b.onclick = () => { BK = { type: b.dataset.type, q: '', date: '', status: '' }; views.bookings(); });
+    $('#bf').onsubmit = (e) => { e.preventDefault(); const f = new FormData(e.target); BK = { ...BK, q: f.get('q'), date: f.get('date'), status: f.get('status') }; views.bookings(); };
+    $$('[data-st]').forEach((s) => s.onchange = async () => { try { await patch(`/admin/bookings/${BK.type}/${s.dataset.st}`, { status: s.value }); toast('Status updated.'); views.bookings(); } catch (x) { toast(x.message, 'err'); } });
+    $$('[data-resched]').forEach((b) => b.onclick = () => { const box = openModal(`<h3>Reschedule tour</h3><form id="rf">${field('New date', 'date', { type: 'date', min: today(), required: 1 })}${field('New time', 'time', { type: 'time', required: 1 })}<p class="form-err" role="alert"></p><button class="btn btn-primary btn-block" type="submit">Save</button></form>`);
+      bindForm($('#rf', box), async (v) => { await patch(`/admin/bookings/tour/${b.dataset.resched}`, v); closeModal(); toast('Tour rescheduled and customer emailed.'); views.bookings(); }); });
+  },
+
+  async messages() {
+    const { rows } = await api('/admin/messages');
+    $('#view').innerHTML = pageHead('Messages') + `<div class="card glass"><div class="list">${rows.map((m) => `<div class="li" style="align-items:flex-start"><div style="max-width:70ch"><strong style="color:var(--white)">${esc(m.name)}</strong> <span class="muted small">${esc(m.email)}${m.phone ? ' · ' + esc(m.phone) : ''} · ${fmtDate(m.created_at)}</span><p style="margin-top:6px">${esc(m.message)}</p></div><div style="display:flex;gap:8px;align-items:center">${sel('st', ['new', 'read', 'responded', 'closed'], m.status, `data-m="${m.id}"`)}<a class="btn btn-outline sm" href="mailto:${esc(m.email)}">Reply</a></div></div>`).join('') || '<p class="empty">No messages yet.</p>'}</div></div>`;
+    $$('[data-m]').forEach((s) => s.onchange = async () => { await patch('/admin/messages/' + s.dataset.m, { status: s.value }); toast('Updated.'); });
+  },
+
+  async attendance() {
+    const range = window.AR || 'day'; const r = await api('/admin/attendance?range=' + range);
+    $('#view').innerHTML = pageHead('Attendance', `<select id="rg">${['day', 'week', 'month'].map((x) => `<option ${x === range ? 'selected' : ''} value="${x}">${x === 'day' ? 'Today' : 'Last ' + (x === 'week' ? '7' : '30') + ' days'}</option>`).join('')}</select>`) +
+      `<div class="grid g-2"><div class="card glass"><h3>Check-in desk</h3><div id="ci"></div></div><div class="card glass"><h3>${r.unique_members} unique members · ${r.entries.length} visits</h3><div class="list" style="max-height:420px;overflow:auto">${r.entries.map((e) => `<div class="li"><div>${esc(e.name)}<small>${fmtDate(e.date)} · in ${fmtTime(e.check_in)}${e.check_out ? ' · out ' + fmtTime(e.check_out) : ''}</small></div></div>`).join('') || '<p class="empty">No visits in this range.</p>'}</div></div></div>`;
+    $('#rg').onchange = (e) => { window.AR = e.target.value; views.attendance(); }; stopCam = checkinPanel($('#ci'), () => views.attendance());
+  },
+
+  async trainers() {
+    const { rows } = await api('/admin/trainers');
+    $('#view').innerHTML = pageHead('Trainers', '<button class="btn btn-primary sm" id="add">Add trainer</button>') + `<div class="card glass"><div class="tbl"><table><thead><tr><th>Trainer</th><th>Specialty</th><th>Exp.</th><th>Price</th><th>Status</th><th></th></tr></thead><tbody>${rows.map((t) => `<tr><td>${esc(t.name)}<br><span class="muted small">${esc(t.email)}</span></td><td>${esc(t.specialty)}</td><td>${t.experience_years} yrs</td><td>${money(t.session_price)}</td><td>${badge(t.status)}</td><td class="right"><button class="btn btn-outline sm" data-e="${t.id}">Edit</button> <button class="btn btn-outline sm" data-av="${t.id}">Availability</button> <button class="btn btn-outline sm ${t.status === 'active' ? 'danger' : ''}" data-tg="${t.id}">${t.status === 'active' ? 'Disable' : 'Enable'}</button></td></tr>`).join('')}</tbody></table></div></div>`;
+    const form = (t) => { const box = openModal(`<h3>${t ? 'Edit' : 'Add'} trainer</h3><form id="tf">${field('Name', 'name', { value: t && t.name, required: 1 })}${t ? '' : field('Email (login)', 'email', { type: 'email', required: 1 })}${field('Specialization', 'specialty', { value: t && t.specialty })}${field('Bio', 'bio', { area: 1, value: t && t.bio, max: 600 })}<div class="row2">${field('Years of experience', 'experience_years', { type: 'number', value: t ? t.experience_years : 0 })}${field('Session price ($)', 'session_price', { type: 'number', value: t ? t.session_price : 0, step: 'any' })}</div>${field('Certifications', 'certifications', { value: t && t.certifications })}
+      <div class="field"><label>Photo</label><div style="display:flex;gap:8px"><input id="f_photo_url" name="photo_url" value="${esc(t && t.photo_url)}" placeholder="https://… or upload" style="flex:1"><label class="btn btn-outline sm" style="cursor:pointer">Upload<input type="file" accept="image/jpeg,image/png,image/webp" hidden id="up"></label></div></div><p class="form-err" role="alert"></p><button class="btn btn-primary btn-block" type="submit">Save</button></form>`, true);
+      $('#up', box).onchange = async (e) => { const f = e.target.files[0]; if (!f) return; try { $('#f_photo_url', box).value = (await api('/admin/upload', { body: { image: await readFile(f) } })).url; toast('Uploaded.'); } catch (x) { toast(x.message, 'err'); } };
+      bindForm($('#tf', box), async (v) => { if (t) await put('/admin/trainers/' + t.id, v); else { const r = await api('/admin/trainers', { body: v }); alert('Trainer created.\nTemporary password (shown once): ' + r.temporary_password); } closeModal(); toast('Saved.'); views.trainers(); }); };
+    $('#add').onclick = () => form(null);
+    $$('[data-e]').forEach((b) => b.onclick = () => form(rows.find((t) => t.id == b.dataset.e)));
+    $$('[data-tg]').forEach((b) => b.onclick = async () => { const t = rows.find((x) => x.id == b.dataset.tg); await put('/admin/trainers/' + t.id, { status: t.status === 'active' ? 'disabled' : 'active' }); toast('Updated.'); views.trainers(); });
+    $$('[data-av]').forEach((b) => b.onclick = async () => { const id = b.dataset.av; const av = Object.fromEntries((await api(`/admin/trainers/${id}/availability`)).availability.map((a) => [a.weekday, a])); const wd = [1, 2, 3, 4, 5, 6, 0];
+      const box = openModal(`<h3>Availability</h3><form id="af">${wd.map((d) => `<div style="display:grid;grid-template-columns:80px 1fr 1fr;gap:8px;margin-bottom:8px;align-items:center"><span class="small">${DAYS[d].slice(0, 3)}</span>${timeInput('s' + d, av[d] && av[d].start_time)}${timeInput('e' + d, av[d] && av[d].end_time)}</div>`).join('')}<p class="form-err" role="alert"></p><button class="btn btn-primary btn-block" type="submit">Save</button></form>`);
+      bindForm($('#af', box), async (v) => { const rows2 = []; for (const d of wd) if (v['s' + d] && v['e' + d]) rows2.push({ weekday: d, start_time: v['s' + d], end_time: v['e' + d] }); await put(`/admin/trainers/${id}/availability`, { availability: rows2 }); closeModal(); toast('Availability saved.'); }); });
+  },
+
+  async site() {
+    const { settings: s } = await api('/admin/settings');
+    const defRules = JSON.stringify({ elite_if: { style: ['Coached'], freq_and_exp: { freq: ['5+'], exp: ['Advanced'] } }, performance_if: { style: ['Group'], freq: ['3-4'], goal: ['Athletic Performance', 'Improve strength'] } }, null, 2);
+    $('#view').innerHTML = pageHead('Site content') + `<div class="card glass" style="max-width:760px"><form id="sf">${field('Hero headline', 'hero_headline', { value: s.hero_headline })}${field('Hero sub-headline', 'hero_subhead', { area: 1, value: s.hero_subhead })}${field('Hero video URL (mp4, optional)', 'hero_video_url', { value: s.hero_video_url })}${field('Announcement banner (optional)', 'announcement', { value: s.announcement })}${field('WhatsApp number (digits with country code, e.g. 15551234567)', 'whatsapp_number', { value: s.whatsapp_number })}
+      <div class="field"><label for="f_quiz_rules">Plan-finder quiz rules (JSON)</label><textarea id="f_quiz_rules" name="quiz_rules" style="min-height:170px;font-family:monospace;font-size:12.5px">${esc(s.quiz_rules || defRules)}</textarea></div>
+      <p class="form-err" role="alert"></p><button class="btn btn-primary" type="submit">Save changes</button></form></div>`;
+    bindForm($('#sf'), async (v) => { await put('/admin/settings', v); toast('Site content saved.'); });
+  }
+};
+['plans', 'classes', 'testimonials', 'facilities', 'faqs'].forEach((k) => { views[k] = () => crudView(k); });
+
+addEventListener('click', async (e) => { const b = e.target.closest('[data-view]'); if (!b) return; const r = await api('/admin/members/' + b.dataset.view); const m = r.member;
+  const L2 = (rows, f) => rows.length ? rows.map(f).join('') : '<p class="empty">None.</p>';
+  openModal(`<h3>${esc(m.name)} ${badge(m.status)}</h3><p class="muted small" style="margin-bottom:12px">${esc(m.email)} · ${esc(m.phone || 'no phone')} · ${esc(m.member_code)} · joined ${fmtDate(m.created_at)}</p>
+    <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap"><button class="btn btn-outline sm ${m.status === 'active' ? 'danger' : ''}" id="tgl">${m.status === 'active' ? 'Suspend account' : 'Activate account'}</button><button class="btn btn-outline sm" id="edt">Edit details</button></div>
+    <h4>Memberships</h4><div class="list">${L2(r.memberships, (x) => `<div class="li"><div>${esc(x.plan_name)}<small>${fmtDate(x.start_date)} → ${fmtDate(x.expiration_date)} · ${esc(x.billing_cycle)}</small></div>${badge(x.status)}</div>`)}</div>
+    <h4 style="margin-top:14px">Payments</h4><div class="list">${L2(r.payments, (x) => `<div class="li"><div>${money(x.amount)}<small>${fmtDate(x.created_at)} · ${esc(x.provider_txn_id || '')}</small></div>${badge(x.status)}</div>`)}</div>
+    <h4 style="margin-top:14px">Class bookings</h4><div class="list">${L2(r.bookings, (x) => `<div class="li"><div>${esc(x.name)}<small>${fmtDate(x.class_date)}</small></div>${badge(x.status)}</div>`)}</div>
+    <h4 style="margin-top:14px">Trainer sessions</h4><div class="list">${L2(r.sessions, (x) => `<div class="li"><div>${esc(x.trainer)}<small>${fmtDate(x.date)} · ${fmtTime(x.start_time)}</small></div>${badge(x.status)}</div>`)}</div>
+    <h4 style="margin-top:14px">Attendance</h4><div class="list">${L2(r.attendance.slice(0, 8), (x) => `<div class="li"><div>${fmtDate(x.date)}<small>in ${fmtTime(x.check_in)}${x.check_out ? ' · out ' + fmtTime(x.check_out) : ''}</small></div></div>`)}</div>
+    <h4 style="margin-top:14px">Progress</h4>${lineChart(r.progress.filter((p) => p.weight != null).map((p) => ({ label: p.date, value: p.weight })))}`, true);
+  $('#tgl').onclick = (ev) => withBtn(ev.target, async () => { await patch('/admin/members/' + m.id, { status: m.status === 'active' ? 'suspended' : 'active' }); closeModal(); toast('Account updated.'); if ((location.hash || '#overview') === '#members') views.members(); });
+  $('#edt').onclick = () => { const box = openModal(`<h3>Edit member</h3><form id="ef">${field('Name', 'name', { value: m.name, required: 1 })}${field('Email', 'email', { type: 'email', value: m.email, required: 1 })}${field('Phone', 'phone', { value: m.phone })}<p class="form-err" role="alert"></p><button class="btn btn-primary btn-block" type="submit">Save</button></form>`); bindForm($('#ef', box), async (v) => { await patch('/admin/members/' + m.id, v); closeModal(); toast('Saved.'); views.members(); }); };
+});
+
+async function route() { if (stopCam) { stopCam(); stopCam = null; } const v = (location.hash || '#overview').slice(1); const k = views[v] ? v : 'overview'; paintNav(k); try { await views[k](); } catch (x) { $('#view').innerHTML = `<p class="form-err">${esc(x.message)}</p>`; } }
+addEventListener('hashchange', route);
+(async () => { U = await requireRole('admin'); route(); })();
+</script></body></html>
